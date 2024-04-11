@@ -15,7 +15,7 @@ if len(physical_devices) > 0:
 
 
 class Dummy:
-    def __init__(self, video:str, output:str="./io_data/output/output.avi", coco_names_path:str ="./io_data/input/classes/coco.names", output_format:str='XVID', 
+    def __init__(self, video:str, output:str="./io_data/output/output.avi", coco_names_path:str ="./io_data/input/coco.names", output_format:str='XVID', 
     iou:float=0.45, score:bool=0.5, dont_show:bool=False, count:bool=False):
         '''
         args: 

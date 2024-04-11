@@ -244,7 +244,7 @@ def read_class_names():
     '''
     Raad COCO classes names 
     '''
-    classes = ['full-faced', 'half-faced', 'invalid', 'no-helmet', 'helmetRider', 'noHelmetRider', 'train', 'truck', 'boat', 'traffic light',
+    classes = ['full-faced', 'half-faced', 'helmetRider', 'invalid', 'no-helmet', 'noHelmetRider', 'train', 'truck', 'boat', 'traffic light',
          'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
          'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
          'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',

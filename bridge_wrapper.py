@@ -38,7 +38,7 @@ class YOLOv7_DeepSORT:
     Class to Wrap ANY detector  of YOLO type with DeepSORT
     '''
     def __init__(self, reID_model_path:str, detector, max_cosine_distance:float=0.4, nn_budget:float=None, nms_max_overlap:float=1.0,
-    coco_names_path:str ="./io_data/input/classes/coco.names",  ):
+    coco_names_path:str ="./io_data/input/coco.names",  ):
         '''
         args: 
             reID_model_path: Path of the model which uses generates the embeddings for the cropped area for Re identification

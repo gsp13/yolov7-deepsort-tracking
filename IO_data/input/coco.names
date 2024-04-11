@@ -2,8 +2,8 @@ full-faced
 half-faced
 invalid
 no-helmet
-rider    
-bus
+helmetRider    
+nohelmetRider
 train
 truck
 boat

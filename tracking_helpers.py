@@ -86,7 +86,7 @@ def extract_image_patch(image, bbox, patch_shape):
 
     # convert to top left, bottom right
     bbox[2:] += bbox[:2]
-    bbox = bbox.astype(int)
+
 
     # clip at image boundaries
     bbox[:2] = np.maximum(0, bbox[:2])
@@ -190,9 +190,9 @@ def generate_detections(encoder, mot_dir, output_dir, detection_dir=None):
         detections_in = np.loadtxt(detection_file, delimiter=',')
         detections_out = []
 
-        frame_indices = detections_in[:, 0].astype(int)
-        min_frame_idx = frame_indices.astype(int).min()
-        max_frame_idx = frame_indices.astype(int).max()
+        frame_indices = detections_in[:, 0].astype(np.int)
+        min_frame_idx = frame_indices.astype(np.int).min()
+        max_frame_idx = frame_indices.astype(np.int).max()
         for frame_idx in range(min_frame_idx, max_frame_idx + 1):
             print("Frame %05d/%05d" % (frame_idx, max_frame_idx))
             mask = frame_indices == frame_idx
@@ -244,7 +244,7 @@ def read_class_names():
     '''
     Raad COCO classes names 
     '''
-    classes = ['full-faced', 'half-faced', 'invalid', 'no-helmet', 'helmetRider', 'nohelmetRider', 'train', 'truck', 'boat', 'traffic light',
+    classes = ['full-faced', 'half-faced', 'invalid', 'no-helmet', 'HelmetRider', 'noHelmetRider', 'train', 'truck', 'boat', 'traffic light',
          'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
          'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
          'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',

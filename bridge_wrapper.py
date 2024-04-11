@@ -1,175 +1,261 @@
-'''
-A Moduele which binds Yolov7 repo with Deepsort with modifications
-'''
-
+# vim: expandtab:ts=4:sw=4
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # comment out below line to enable tensorflow logging outputs
-import time
-import tensorflow as tf
+import errno
+import argparse
+import numpy as np
+import cv2
+import tensorflow.compat.v1 as tf
+
+#tf.compat.v1.disable_eager_execution()
 
 physical_devices = tf.config.experimental.list_physical_devices('GPU')
 if len(physical_devices) > 0:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
-    
-import cv2
-import numpy as np
-import matplotlib.pyplot as plt
-
-from tensorflow.compat.v1 import ConfigProto # DeepSORT official implementation uses tf1.x so we have to do some modifications to avoid errors
-
-# deep sort imports
-from deep_sort import preprocessing, nn_matching
-from deep_sort.detection import Detection
-from deep_sort.tracker import Tracker
-
-# import from helpers
-from tracking_helpers import read_class_names, create_box_encoder
-from detection_helpers import *
-
-
- # load configuration for object detector
-config = ConfigProto()
-config.gpu_options.allow_growth = True
 
 
 
-class YOLOv7_DeepSORT:
-    '''
-    Class to Wrap ANY detector  of YOLO type with DeepSORT
-    '''
-    def __init__(self, reID_model_path:str, detector, max_cosine_distance:float=0.4, nn_budget:float=None, nms_max_overlap:float=1.0,
-    coco_names_path:str ="./io_data/input/coco.names",  ):
+class Dummy:
+    def __init__(self, video:str, output:str="./io_data/output/output.avi", coco_names_path:str ="./io_data/input/classes/coco.names", output_format:str='XVID', 
+    iou:float=0.45, score:bool=0.5, dont_show:bool=False, count:bool=False):
         '''
-        args: 
-            reID_model_path: Path of the model which uses generates the embeddings for the cropped area for Re identification
-            detector: object of YOLO models or any model which gives you detections as [x1,y1,x2,y2,scores, class]
-            max_cosine_distance: Cosine Distance threshold for "SAME" person matching
-            nn_budget:  If not None, fix samples per class to at most this number. Removes the oldest samples when the budget is reached.
-            nms_max_overlap: Maximum NMs allowed for the tracker
-            coco_file_path: File wich contains the path to coco naames
-        '''
-        self.detector = detector
-        self.coco_names_path = coco_names_path
-        self.nms_max_overlap = nms_max_overlap
-        self.class_names = read_class_names()
-
-        # initialize deep sort
-        self.encoder = create_box_encoder(reID_model_path, batch_size=1)
-        metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget) # calculate cosine distance metric
-        self.tracker = Tracker(metric) # initialize tracker
-
-
-    def track_video(self,video:str, output:str, skip_frames:int=0, show_live:bool=False, count_objects:bool=False, verbose:int = 0):
-        '''
-        Track any given webcam or video
         args: 
             video: path to input video or set to 0 for webcam
             output: path to output video
-            skip_frames: Skip every nth frame. After saving the video, it'll have very visuals experience due to skipped frames
-            show_live: Whether to show live video tracking. Press the key 'q' to quit
-            count_objects: count objects being tracked on screen
-            verbose: print details on the screen allowed values 0,1,2
+            iou: IOU threshold
+            score: Matching score threshold
+            dont_show: dont show video output
+            count: count objects being tracked on screen
+            coco_file_path: File wich contains the path to coco naames
         '''
-        try: # begin video capture
-            vid = cv2.VideoCapture(int(video))
-        except:
-            vid = cv2.VideoCapture(video)
+        self.video = video
+        self.output = output
+        self.output_format = output_format
+        self.count = count
+        self.iou = iou
+        self.dont_show = dont_show
+        self.score = score
+        self.coco_names_path = coco_names_path
 
-        out = None
-        if output: # get video ready to save locally if flag is set
-            width = int(vid.get(cv2.CAP_PROP_FRAME_WIDTH))  # by default VideoCapture returns float instead of int
-            height = int(vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            fps = int(vid.get(cv2.CAP_PROP_FPS))
-            codec = cv2.VideoWriter_fourcc(*"XVID")
-            out = cv2.VideoWriter(output, codec, fps, (width, height))
 
-        frame_num = 0
-        while True: # while video is running
-            return_value, frame = vid.read()
-            if not return_value:
-                print('Video has ended or failed!')
-                break
-            frame_num +=1
 
-            if skip_frames and not frame_num % skip_frames: continue # skip every nth frame. When every frame is not important, you can use this to fasten the process
-            if verbose >= 1:start_time = time.time()
+def _run_in_batches(f, data_dict, out, batch_size):
+    data_len = len(out)
+    num_batches = int(data_len / batch_size)
 
-            # -----------------------------------------PUT ANY DETECTION MODEL HERE -----------------------------------------------------------------
-            yolo_dets = self.detector.detect(frame.copy(), plot_bb = False)  # Get the detections
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    s, e = 0, 0
+    for i in range(num_batches):
+        s, e = i * batch_size, (i + 1) * batch_size
+        batch_data_dict = {k: v[s:e] for k, v in data_dict.items()}
+        out[s:e] = f(batch_data_dict)
+    if e < len(out):
+        batch_data_dict = {k: v[e:] for k, v in data_dict.items()}
+        out[e:] = f(batch_data_dict)
 
-            if yolo_dets is None:
-                bboxes = []
-                scores = []
-                classes = []
-                num_objects = 0
-            
-            else:
-                bboxes = yolo_dets[:,:4]
-                bboxes[:,2] = bboxes[:,2] - bboxes[:,0] # convert from xyxy to xywh
-                bboxes[:,3] = bboxes[:,3] - bboxes[:,1]
 
-                scores = yolo_dets[:,4]
-                classes = yolo_dets[:,-1]
-                num_objects = bboxes.shape[0]
-            # ---------------------------------------- DETECTION PART COMPLETED ---------------------------------------------------------------------
-            
-            names = []
-            for i in range(num_objects): # loop through objects and use class index to get class name
-                class_indx = int(classes[i])
-                class_name = self.class_names[class_indx]
-                names.append(class_name)
+def extract_image_patch(image, bbox, patch_shape):
+    """Extract image patch from bounding box.
 
-            names = np.array(names)
-            count = len(names)
+    Parameters
+    ----------
+    image : ndarray
+        The full image.
+    bbox : array_like
+        The bounding box in format (x, y, width, height).
+    patch_shape : Optional[array_like]
+        This parameter can be used to enforce a desired patch shape
+        (height, width). First, the `bbox` is adapted to the aspect ratio
+        of the patch shape, then it is clipped at the image boundaries.
+        If None, the shape is computed from :arg:`bbox`.
 
-            if count_objects:
-                cv2.putText(frame, "Objects being tracked: {}".format(count), (5, 35), cv2.FONT_HERSHEY_COMPLEX_SMALL, 1.5, (0, 0, 0), 2)
+    Returns
+    -------
+    ndarray | NoneType
+        An image patch showing the :arg:`bbox`, optionally reshaped to
+        :arg:`patch_shape`.
+        Returns None if the bounding box is empty or fully outside of the image
+        boundaries.
 
-            # ---------------------------------- DeepSORT tacker work starts here ------------------------------------------------------------
-            features = self.encoder(frame, bboxes) # encode detections and feed to tracker. [No of BB / detections per frame, embed_size]
-            detections = [Detection(bbox, score, class_name, feature) for bbox, score, class_name, feature in zip(bboxes, scores, names, features)] # [No of BB per frame] deep_sort.detection.Detection object
+    """
+    bbox = np.array(bbox)
+    if patch_shape is not None:
+        # correct aspect ratio to patch shape
+        target_aspect = float(patch_shape[1]) / patch_shape[0]
+        new_width = target_aspect * bbox[3]
+        bbox[0] -= (new_width - bbox[2]) / 2
+        bbox[2] = new_width
 
-            cmap = plt.get_cmap('tab20b') #initialize color map
-            colors = [cmap(i)[:3] for i in np.linspace(0, 1, 20)]
+    # convert to top left, bottom right
+    bbox[2:] += bbox[:2]
+    bbox = bbox.astype(np.int32)
 
-            boxs = np.array([d.tlwh for d in detections])  # run non-maxima supression below
-            scores = np.array([d.confidence for d in detections])
-            classes = np.array([d.class_name for d in detections])
-            indices = preprocessing.non_max_suppression(boxs, classes, self.nms_max_overlap, scores)
-            detections = [detections[i] for i in indices]       
+    # clip at image boundaries
+    bbox[:2] = np.maximum(0, bbox[:2])
+    bbox[2:] = np.minimum(np.asarray(image.shape[:2][::-1]) - 1, bbox[2:])
+    if np.any(bbox[:2] >= bbox[2:]):
+        return None
+    sx, sy, ex, ey = bbox
+    image = image[sy:ey, sx:ex]
+    image = cv2.resize(image, tuple(patch_shape[::-1]))
+    return image
 
-            self.tracker.predict()  # Call the tracker
-            self.tracker.update(detections) #  updtate using Kalman Gain
 
-            for track in self.tracker.tracks:  # update new findings AKA tracks
-                if not track.is_confirmed() or track.time_since_update > 1:
-                    continue 
-                bbox = track.to_tlbr()
-                class_name = track.get_class()
-        
-                color = colors[int(track.track_id) % len(colors)]  # draw bbox on screen
-                color = [i * 255 for i in color]
-                cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])), color, 2)
-                cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
-                cv2.putText(frame, class_name + " : " + str(track.track_id),(int(bbox[0]), int(bbox[1]-11)),0, 0.6, (255,255,255),1, lineType=cv2.LINE_AA)    
+class ImageEncoder(object):
 
-                if verbose == 2:
-                    print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
-                    
-            # -------------------------------- Tracker work ENDS here -----------------------------------------------------------------------
-            if verbose >= 1:
-                fps = 1.0 / (time.time() - start_time) # calculate frames per second of running detections
-                if not count_objects: print(f"Processed frame no: {frame_num} || Current FPS: {round(fps,2)}")
-                else: print(f"Processed frame no: {frame_num} || Current FPS: {round(fps,2)} || Objects tracked: {count}")
-            
-            result = np.asarray(frame)
-            result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            
-            if output: out.write(result) # save output video
+    def __init__(self, checkpoint_filename, input_name="images",
+                 output_name="features"):
+        self.session = tf.Session()
+        with tf.gfile.GFile(checkpoint_filename, "rb") as file_handle:
+            graph_def = tf.GraphDef()
+            graph_def.ParseFromString(file_handle.read())
+        tf.import_graph_def(graph_def, name="net")
+        self.input_var = tf.get_default_graph().get_tensor_by_name(
+            "%s:0" % input_name)
+        self.output_var = tf.get_default_graph().get_tensor_by_name(
+            "%s:0" % output_name)
 
-            if show_live:
-                cv2.imshow("Output Video", result)
-                if cv2.waitKey(1) & 0xFF == ord('q'): break
-        
-        cv2.destroyAllWindows()
+        assert len(self.output_var.get_shape()) == 2
+        assert len(self.input_var.get_shape()) == 4
+        self.feature_dim = self.output_var.get_shape().as_list()[-1]
+        self.image_shape = self.input_var.get_shape().as_list()[1:]
+
+    def __call__(self, data_x, batch_size=32):
+        out = np.zeros((len(data_x), self.feature_dim), np.float32)
+        _run_in_batches(
+            lambda x: self.session.run(self.output_var, feed_dict=x),
+            {self.input_var: data_x}, out, batch_size)
+        return out
+
+
+def create_box_encoder(model_filename, input_name="images",
+                       output_name="features", batch_size=32):
+    image_encoder = ImageEncoder(model_filename, input_name, output_name)
+    image_shape = image_encoder.image_shape
+
+    def encoder(image, boxes):
+        image_patches = []
+        for box in boxes:
+            patch = extract_image_patch(image, box, image_shape[:2])
+            if patch is None:
+                print("WARNING: Failed to extract image patch: %s." % str(box))
+                patch = np.random.uniform(
+                    0., 255., image_shape).astype(np.uint8)
+            image_patches.append(patch)
+        image_patches = np.asarray(image_patches)
+        return image_encoder(image_patches, batch_size)
+
+    return encoder
+
+
+def generate_detections(encoder, mot_dir, output_dir, detection_dir=None):
+    """Generate detections with features.
+
+    Parameters
+    ----------
+    encoder : Callable[image, ndarray] -> ndarray
+        The encoder function takes as input a BGR color image and a matrix of
+        bounding boxes in format `(x, y, w, h)` and returns a matrix of
+        corresponding feature vectors.
+    mot_dir : str
+        Path to the MOTChallenge directory (can be either train or test).
+    output_dir
+        Path to the output directory. Will be created if it does not exist.
+    detection_dir
+        Path to custom detections. The directory structure should be the default
+        MOTChallenge structure: `[sequence]/det/det.txt`. If None, uses the
+        standard MOTChallenge detections.
+
+    """
+    if detection_dir is None:
+        detection_dir = mot_dir
+    try:
+        os.makedirs(output_dir)
+    except OSError as exception:
+        if exception.errno == errno.EEXIST and os.path.isdir(output_dir):
+            pass
+        else:
+            raise ValueError(
+                "Failed to created output directory '%s'" % output_dir)
+
+    for sequence in os.listdir(mot_dir):
+        print("Processing %s" % sequence)
+        sequence_dir = os.path.join(mot_dir, sequence)
+
+        image_dir = os.path.join(sequence_dir, "img1")
+        image_filenames = {
+            int(os.path.splitext(f)[0]): os.path.join(image_dir, f)
+            for f in os.listdir(image_dir)}
+
+        detection_file = os.path.join(
+            detection_dir, sequence, "det/det.txt")
+        detections_in = np.loadtxt(detection_file, delimiter=',')
+        detections_out = []
+
+        frame_indices = detections_in[:, 0].astype(np.int32)
+        min_frame_idx = frame_indices.astype(np.int32).min()
+        max_frame_idx = frame_indices.astype(np.int32).max()
+        for frame_idx in range(min_frame_idx, max_frame_idx + 1):
+            print("Frame %05d/%05d" % (frame_idx, max_frame_idx))
+            mask = frame_indices == frame_idx
+            rows = detections_in[mask]
+
+            if frame_idx not in image_filenames:
+                print("WARNING could not find image for frame %d" % frame_idx)
+                continue
+            bgr_image = cv2.imread(
+                image_filenames[frame_idx], cv2.IMREAD_COLOR)
+            features = encoder(bgr_image, rows[:, 2:6].copy())
+            detections_out += [np.r_[(row, feature)] for row, feature
+                               in zip(rows, features)]
+
+        output_filename = os.path.join(output_dir, "%s.npy" % sequence)
+        np.save(
+            output_filename, np.asarray(detections_out), allow_pickle=False)
+
+
+def parse_args():
+    """Parse command line arguments.
+    """
+    parser = argparse.ArgumentParser(description="Re-ID feature extractor")
+    parser.add_argument(
+        "--model",
+        default="resources/networks/mars-small128.pb",
+        help="Path to freezed inference graph protobuf.")
+    parser.add_argument(
+        "--mot_dir", help="Path to MOTChallenge directory (train or test)",
+        required=True)
+    parser.add_argument(
+        "--detection_dir", help="Path to custom detections. Defaults to "
+        "standard MOT detections Directory structure should be the default "
+        "MOTChallenge structure: [sequence]/det/det.txt", default=None)
+    parser.add_argument(
+        "--output_dir", help="Output directory. Will be created if it does not"
+        " exist.", default="detections")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    encoder = create_box_encoder(args.model, batch_size=32)
+    generate_detections(encoder, args.mot_dir, args.output_dir,
+                        args.detection_dir)
+
+
+def read_class_names():
+    '''
+    Raad COCO classes names 
+    '''
+    classes = ['full-faced', 'half-faced', 'invalid', 'no-helmet', 'rider', 'bus', 'train', 'truck', 'boat', 'traffic light',
+         'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+         'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+         'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+         'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+         'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+         'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone',
+         'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear',
+         'hair drier', 'toothbrush']
+   
+    return dict(zip(range(len(classes)), classes))
+
+
+if __name__ == "__main__":
+    main()
